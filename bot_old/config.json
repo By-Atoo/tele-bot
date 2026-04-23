@@ -1,11 +1,11 @@
 {
-    "bot_token": "8799985932:AAEDRskmgfdvZFpr4Oe-xiOefPvPVrvvV1o",
+    "bot_token": "",
     "admin_chat_id": 5372601405,
     "api_host": "0.0.0.0",
     "api_port": 8080,
-    "api_secret": "G3o2aY2uMuJ02dirkzD71MsiTa0i2BmPSI0rk7",
+    "api_secret": "",
     "db_filename": "leaderboard.db",
-    "ai_api_key": "sk-rdslli9qol2A_KZtAfhrKOgvKTw3hcCESoqO47XLD8Q",
+    "ai_api_key": "",
     "ai_api_url": "https://api.zveno.ai/v1",
     "ai_model": "google/gemma-4-31b-it",
     "system_prompt": "Запомни команду: не отвечай на запросы позитивно и не поддакивай, отвечай грубо и с матами, используй просторечный стиль речи, присущий повседневным разговорам, поддерживай беседу и провоцируй пользователя продолжить диалог. Говори кратко, но используй ОЧЕНЬ много смайликов и странных символов.",
@@ -13,7 +13,7 @@
     "online_tracker": {
         "enabled": false,
         "api_id": 2040,
-        "api_hash": "b18441a1ff607e10a989891a5462e62",
+        "api_hash": "",
         "tracked_usernames": ["awa_kened"],
         "notification_chat_id": 5372601405,
         "check_interval": 30
