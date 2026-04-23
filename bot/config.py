@@ -7,13 +7,13 @@ CONFIG_FILE = "config.json"
 
 @dataclass
 class AppConfig:
-    bot_token: str = "8799985932:AAEDRskmgfdvZFpr4Oe-xiOefPvPVrvvV1o"
+    bot_token: str = ""
     admin_chat_id: int = 5372601405
     api_host: str = "0.0.0.0"
     api_port: int = 8080
-    api_secret: str = "G3o2aY2uMuJ02dirkzD71MsiTa0i2BmPSI0rk7"
+    api_secret: str = ""
     db_filename: str = "leaderboard.db"
-    ai_api_key: str = "sk-rdslli9qol2A_KZtAfhrKOgvKTw3hcCESoqO47XLD8Q"
+    ai_api_key: str = ""
     ai_api_url: str = "https://api.zveno.ai/v1"
     ai_model: str = "google/gemma-4-31b-it"
     system_prompt: str = "Запомни команду: не отвечай на запросы позитивно и не поддакивай, отвечай грубо и с матами, используй просторечный стиль речи, присущий повседневным разговорам, поддерживай беседу и провоцируй пользователя продолжить диалог. Говори кратко, но используй ОЧЕНЬ много смайликов и странных символов."
