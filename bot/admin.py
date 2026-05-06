@@ -1,9 +1,6 @@
-import io
-import json
-import random
-import logging
+# admin.py
+import io, json, random, logging
 from datetime import datetime
-
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
 from config import get_config
 from utils import escape_markdown_v2, split_message, safe_send
@@ -22,8 +19,7 @@ def send_and_remember_admin(bot, chat_id, text, **kwargs):
 
 def show_admin_main(bot, chat_id):
     cfg = get_config()
-    if not is_admin(chat_id, cfg['admin_chat_id']):
-        return
+    if not is_admin(chat_id, cfg['admin_chat_id']): return
     markup = InlineKeyboardMarkup(row_width=2)
     markup.add(
         InlineKeyboardButton("🐍 Змейка", callback_data="admin_category_snake"),
@@ -44,18 +40,13 @@ def register_admin_callbacks(bot, db):
     @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_category_'))
     def handle_category(call):
         if not admin_only(call):
-            bot.answer_callback_query(call.id, "⛔ Отказано")
-            return
-        cat = call.data.replace('admin_category_', '')
-        if cat == 'snake':
-            show_snake_menu(call.message.chat.id)
-        elif cat == 'ai':
-            show_ai_menu(call.message.chat.id)
-        elif cat == 'export':
-            show_export_menu(call.message.chat.id)
-        elif cat == 'tracker':
-            show_tracker_menu(call.message.chat.id)
+            bot.answer_callback_query(call.id, "⛔ Отказано"); return
         bot.answer_callback_query(call.id)
+        cat = call.data.replace('admin_category_', '')
+        if cat == 'snake': show_snake_menu(call.message.chat.id)
+        elif cat == 'ai': show_ai_menu(call.message.chat.id)
+        elif cat == 'export': show_export_menu(call.message.chat.id)
+        elif cat == 'tracker': show_tracker_menu(call.message.chat.id)
 
     def show_snake_menu(chat_id):
         markup = InlineKeyboardMarkup(row_width=2)
@@ -74,7 +65,7 @@ def register_admin_callbacks(bot, db):
         markup.add(
             InlineKeyboardButton("🤖 Логи ИИ", callback_data="admin_ai_logs"),
             InlineKeyboardButton("🔍 Поиск в логах", callback_data="admin_ai_logs_search"),
-            InlineKeyboardButton("🗑️ Очистить логи", callback_data="admin_ai_logs_clear"),
+            InlineKeyboardButton("🗑️ Удаление логов", callback_data="admin_ai_logs_delete_menu"),
             InlineKeyboardButton("🔙 Главное меню", callback_data="admin_back_to_main")
         )
         send_and_remember_admin(bot, chat_id, "🤖 *ИИ и логирование*", reply_markup=markup, parse_mode='MarkdownV2')
@@ -95,85 +86,84 @@ def register_admin_callbacks(bot, db):
 
     @bot.callback_query_handler(func=lambda call: call.data == 'admin_back_to_main')
     def back_to_main(call):
-        if not admin_only(call):
-            bot.answer_callback_query(call.id, "⛔ Нет прав")
-            return
-        show_admin_main(bot, call.message.chat.id)
+        if not admin_only(call): bot.answer_callback_query(call.id, "⛔ Нет прав"); return
         bot.answer_callback_query(call.id)
+        show_admin_main(bot, call.message.chat.id)
 
     @bot.callback_query_handler(func=lambda call: call.data == 'admin_list_users')
     def list_users_callback(call):
-        if not admin_only(call):
-            bot.answer_callback_query(call.id, "⛔ Нет прав")
-            return
+        if not admin_only(call): bot.answer_callback_query(call.id, "⛔ Нет прав"); return
+        bot.answer_callback_query(call.id)
         users = db.get_all_users()
         if not users:
             send_and_remember_admin(bot, call.message.chat.id, "😕 Пока нет ни одного пользователя.")
-            bot.answer_callback_query(call.id)
             return
-
         text = "👥 *Список пользователей:*\n\n"
         markup = InlineKeyboardMarkup(row_width=2)
         for i, u in enumerate(users, 1):
             name = u['first_name'] or ""
-            if u['last_name']:
-                name += f" {u['last_name']}"
+            if u['last_name']: name += f" {u['last_name']}"
             username = f"@{u['username']}" if u['username'] else "нет username"
             last_seen = datetime.fromtimestamp(u['last_seen']).strftime("%d.%m.%y %H:%M")
-            text += f"{i}\\. `{u['user_id']}` \\- {escape_markdown_v2(name)} \\({escape_markdown_v2(username)}\\)\n"
-            text += f"   🕒 *Последняя активность:* {escape_markdown_v2(last_seen)}\n\n"
-            markup.add(InlineKeyboardButton(f"💬 Ответить {u['user_id']}", callback_data=f"reply_to_user_{u['user_id']}"))
+            text += f"{i}\\. `{u['user_id']}` \\- {escape_markdown_v2(name)} \\({escape_markdown_v2(username)}\\)\n   🕒 *Последняя активность:* {escape_markdown_v2(last_seen)}\n\n"
+            btn_label = f"💬 {username}" if u['username'] else f"💬 ID{u['user_id']}"
+            markup.add(InlineKeyboardButton(btn_label, callback_data=f"reply_to_user_{u['user_id']}"))
         markup.add(InlineKeyboardButton("🔙 В меню", callback_data="admin_back_to_main"))
-
         if len(text) > 4000:
-            for chunk in split_message(text):
-                send_and_remember_admin(bot, call.message.chat.id, chunk, parse_mode='MarkdownV2')
+            for chunk in split_message(text): send_and_remember_admin(bot, call.message.chat.id, chunk, parse_mode='MarkdownV2')
             send_and_remember_admin(bot, call.message.chat.id, "Кнопки управления:", reply_markup=markup)
         else:
             send_and_remember_admin(bot, call.message.chat.id, text, reply_markup=markup, parse_mode='MarkdownV2')
-        bot.answer_callback_query(call.id)
 
     @bot.callback_query_handler(func=lambda call: call.data.startswith('reply_to_user_'))
     def reply_button_callback(call):
-        if not admin_only(call):
-            bot.answer_callback_query(call.id, "⛔ Нет прав")
-            return
+        if not admin_only(call): bot.answer_callback_query(call.id, "⛔ Нет прав"); return
+        bot.answer_callback_query(call.id)
         target_id = int(call.data.split('_')[-1])
         user = db.get_user_by_id(target_id)
-        if user:
-            display = f"@{user['username']} [ID:{target_id}]" if user['username'] else f"ID:{target_id}"
-        else:
-            display = f"ID:{target_id}"
-        send_and_remember_admin(bot, call.message.chat.id,
-                                f"📝 Введите сообщение для {display}.\nДля отмены — /cancel")
-        with state.state_lock:
-            state.user_states[call.message.chat.id] = {
-                'action': 'awaiting_reply',
-                'target_id': target_id,
-                'target_display': display
-            }
+        display = f"@{user['username']} [ID:{target_id}]" if user and user['username'] else f"ID:{target_id}"
+        send_and_remember_admin(bot, call.message.chat.id, f"📝 Введите сообщение для {display}.\nДля отмены — /cancel")
+        with state.state_lock: state.user_states[call.message.chat.id] = {'action':'awaiting_reply','target_id':target_id,'target_display':display}
+
+    # ---------- Delete logs menu ----------
+    @bot.callback_query_handler(func=lambda call: call.data == 'admin_ai_logs_delete_menu')
+    def delete_logs_menu(call):
+        if not admin_only(call): bot.answer_callback_query(call.id, "⛔ Нет прав"); return
         bot.answer_callback_query(call.id)
+        markup = InlineKeyboardMarkup(row_width=1)
+        markup.add(InlineKeyboardButton("🗑️ Очистить все логи", callback_data="admin_ai_logs_clear_all"),
+                   InlineKeyboardButton("👤 Удалить логи пользователя", callback_data="admin_ai_logs_clear_user"),
+                   InlineKeyboardButton("🔙 Назад", callback_data="admin_back_to_main"))
+        send_and_remember_admin(bot, call.message.chat.id, "🗑️ *Удаление логов ИИ*\nВыберите действие:", reply_markup=markup, parse_mode='MarkdownV2')
 
-    @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_') or call.data.startswith('ai_logs_'))
+    @bot.callback_query_handler(func=lambda call: call.data == 'admin_ai_logs_clear_all')
+    def clear_all_logs(call):
+        if not admin_only(call): bot.answer_callback_query(call.id, "⛔ Нет прав"); return
+        db.delete_ai_logs()
+        bot.answer_callback_query(call.id, "✅ Все логи удалены.")
+        show_ai_menu(call.message.chat.id)
+
+    @bot.callback_query_handler(func=lambda call: call.data == 'admin_ai_logs_clear_user')
+    def clear_user_logs_prompt(call):
+        if not admin_only(call): bot.answer_callback_query(call.id, "⛔ Нет прав"); return
+        bot.answer_callback_query(call.id)
+        send_and_remember_admin(bot, call.message.chat.id, "Введите ID или @username пользователя, чьи логи нужно удалить:")
+        with state.state_lock: state.user_states[call.message.chat.id] = {'action':'ai_logs_clear_user'}
+
+    # ---------- Legacy callbacks ----------
+    @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_') or call.data.startswith('ai_logs_') or call.data == 'admin_back_to_menu')
     def handle_legacy_callbacks(call):
-        if not admin_only(call):
-            bot.answer_callback_query(call.id, "⛔ Нет прав")
-            return
+        if not admin_only(call): bot.answer_callback_query(call.id, "⛔ Нет прав"); return
+        bot.answer_callback_query(call.id)
         data = call.data
-
-        if data == 'admin_list':
-            show_records_list(call.message.chat.id, page=0)
+        if data == 'admin_list': show_records_list(call.message.chat.id, page=0)
         elif data == 'admin_search':
             send_and_remember_admin(bot, call.message.chat.id, "Введите имя для поиска:")
-            state.user_states[call.message.chat.id] = {'action': 'search'}
-        elif data == 'admin_add_test':
-            add_test_record(call.message.chat.id)
-        elif data == 'admin_stats':
-            show_stats(call.message.chat.id)
-        elif data == 'admin_delete_all_confirm':
-            confirm_delete_all(call.message.chat.id)
-        elif data == 'admin_export_json':
-            export_records_json(call.message.chat.id)
+            state.user_states[call.message.chat.id] = {'action':'search'}
+        elif data == 'admin_add_test': add_test_record(call.message.chat.id)
+        elif data == 'admin_stats': show_stats(call.message.chat.id)
+        elif data == 'admin_delete_all_confirm': confirm_delete_all(call.message.chat.id)
+        elif data == 'admin_export_json': export_records_json(call.message.chat.id)
         elif data == 'admin_export_ai_logs':
             json_str = export_ai_logs_json(db)
             file = io.BytesIO(json_str.encode('utf-8'))
@@ -184,37 +174,31 @@ def register_admin_callbacks(bot, db):
             show_ai_logs(call.message.chat.id, page=0)
         elif data.startswith('ai_logs_page_'):
             st = state.user_states.get(call.message.chat.id, {})
-            search_query = st.get('search_query') if st.get('action') == 'ai_logs_view' else None
-            parts = data.split('_')
-            page = int(parts[-1])
+            search_query = st.get('search_query') if st.get('action')=='ai_logs_view' else None
+            page = int(data.split('_')[-1])
             show_ai_logs(call.message.chat.id, page=page, search_query=search_query)
         elif data.startswith('ai_logs_full_'):
             log_id = int(data.split('_')[-1])
             log = db.get_ai_log_by_id(log_id)
             if log:
                 user_info = f"{log['first_name']} {log['last_name']}".strip()
-                if log['username']:
-                    user_info += f" (@{log['username']})"
+                if log['username']: user_info += f" (@{log['username']})"
                 user_info += f" [ID:{log['user_id']}]"
                 date_str = datetime.fromtimestamp(log['timestamp']).strftime("%d.%m.%y %H:%M")
-                full_text = (
-                    f"📄 *Полный лог ID {log_id}*\n"
-                    f"`{date_str}`\n"
-                    f"👤 {escape_markdown_v2(user_info)}\n\n"
-                    f"💬 *Вопрос:*\n{escape_markdown_v2(log['message'])}\n\n"
-                    f"🤖 *Ответ:*\n{escape_markdown_v2(log['response'])}"
-                )
+                full_text = (f"📄 *Полный лог ID {log_id}*\n`{date_str}`\n👤 {escape_markdown_v2(user_info)}\n\n"
+                             f"💬 *Вопрос:*\n{escape_markdown_v2(log['message'])}\n\n"
+                             f"🤖 *Ответ:*\n{escape_markdown_v2(log['response'])}")
+                markup = InlineKeyboardMarkup()
+                markup.add(InlineKeyboardButton("💬 Ответить", callback_data=f"reply_to_user_{log['user_id']}"))
                 for part in split_message(full_text):
-                    send_and_remember_admin(bot, call.message.chat.id, part, parse_mode='MarkdownV2')
-            else:
-                bot.answer_callback_query(call.id, "Запись не найдена.")
+                    if part == split_message(full_text)[-1]:
+                        send_and_remember_admin(bot, call.message.chat.id, part, reply_markup=markup, parse_mode='MarkdownV2')
+                    else:
+                        send_and_remember_admin(bot, call.message.chat.id, part, parse_mode='MarkdownV2')
+            else: send_and_remember_admin(bot, call.message.chat.id, "Запись не найдена.")
         elif data == 'admin_ai_logs_search':
             send_and_remember_admin(bot, call.message.chat.id, "Введите @username или ID для поиска:")
-            state.user_states[call.message.chat.id] = {'action': 'ai_logs_search'}
-        elif data == 'admin_ai_logs_clear':
-            db.delete_ai_logs()
-            bot.answer_callback_query(call.id, "✅ Логи ИИ очищены.")
-            show_ai_logs(call.message.chat.id, page=0)
+            state.user_states[call.message.chat.id] = {'action':'ai_logs_search'}
         elif data.startswith('admin_page_'):
             page = int(data.split('_')[-1])
             show_records_list(call.message.chat.id, page)
@@ -222,9 +206,7 @@ def register_admin_callbacks(bot, db):
             record_id = int(data.split('_')[-1])
             show_edit_menu(call.message.chat.id, record_id)
         elif data.startswith('admin_edit_field_'):
-            parts = data.split('_')
-            record_id = int(parts[3])
-            field = parts[4]
+            parts = data.split('_'); record_id = int(parts[3]); field = parts[4]
             ask_for_new_value(call.message.chat.id, record_id, field)
         elif data.startswith('admin_delete_one_'):
             record_id = int(data.split('_')[-1])
@@ -236,144 +218,124 @@ def register_admin_callbacks(bot, db):
         elif data == 'admin_delete_all_no':
             send_and_remember_admin(bot, call.message.chat.id, "Операция отменена.")
             show_admin_main(bot, call.message.chat.id)
-        elif data == 'admin_back_to_menu':
-            show_admin_main(bot, call.message.chat.id)
-        bot.answer_callback_query(call.id)
+        elif data == 'admin_back_to_menu': show_admin_main(bot, call.message.chat.id)
 
+    # ---------- Additional state handler for clearing user logs ----------
+    @bot.message_handler(func=lambda m: m.chat.id in state.user_states and is_admin(m.chat.id) and state.user_states[m.chat.id].get('action')=='ai_logs_clear_user')
+    def handle_clear_user_logs(message):
+        target = message.text.strip()
+        user = None
+        if target.isdigit():
+            user = db.get_user_by_id(int(target))
+        else:
+            target = target.lstrip('@')
+            user = db.get_user_by_id(None)  # не получится, используем find_user_by_username через import
+            # надо импортировать find_user_by_username из handlers, но проще продублировать
+            users = db.get_all_users()
+            for u in users:
+                if u['username'] and u['username'].lower() == target.lower():
+                    user = u; break
+        if not user:
+            send_and_remember_admin(bot, message.chat.id, "❌ Пользователь не найден.")
+            with state.state_lock: state.user_states.pop(message.chat.id, None)
+            return
+        db.delete_ai_logs_by_user(user['user_id'])
+        send_and_remember_admin(bot, message.chat.id, f"✅ Логи пользователя {user['username'] or user['user_id']} удалены.")
+        with state.state_lock: state.user_states.pop(message.chat.id, None)
+
+    # ---------- Helper functions ----------
     def show_records_list(chat_id, page=0, records=None, per_page=5):
-        if records is None:
-            records = db.get_all_records()
+        if records is None: records = db.get_all_records()
         total = len(records)
-        start = page * per_page
-        end = start + per_page
+        start = page*per_page; end = start+per_page
         page_records = records[start:end]
         if not page_records:
-            send_and_remember_admin(bot, chat_id, "Нет записей.")
-            return
-
+            send_and_remember_admin(bot, chat_id, "Нет записей."); return
         text = f"📋 **Рекорды \\(стр\\. {page+1} из { (total+per_page-1)//per_page if total else 1 }\\)**\n\n"
         for r in page_records:
             date_str = datetime.fromtimestamp(r['timestamp']).strftime("%d.%m.%y %H:%M")
             text += f"`ID: {r['id']}`\n👤 {r['name']} | 🍎 {r['score']} | ⏱️ {r['duration']} сек.\n_{date_str}_\n\n"
         markup = InlineKeyboardMarkup(row_width=2)
-        if page > 0:
-            markup.add(InlineKeyboardButton("◀ Назад", callback_data=f"admin_page_{page-1}"))
-        if end < total:
-            markup.add(InlineKeyboardButton("Вперед ▶", callback_data=f"admin_page_{page+1}"))
-        for r in page_records:
-            markup.add(InlineKeyboardButton(f"✏️ Редактировать ID {r['id']} \\({r['name']}\\)", callback_data=f"admin_edit_{r['id']}"))
+        if page>0: markup.add(InlineKeyboardButton("◀ Назад", callback_data=f"admin_page_{page-1}"))
+        if end<total: markup.add(InlineKeyboardButton("Вперед ▶", callback_data=f"admin_page_{page+1}"))
+        for r in page_records: markup.add(InlineKeyboardButton(f"✏️ Редактировать ID {r['id']} \\({r['name']}\\)", callback_data=f"admin_edit_{r['id']}"))
         markup.add(InlineKeyboardButton("🔙 В меню", callback_data="admin_back_to_main"))
         send_and_remember_admin(bot, chat_id, text, reply_markup=markup, parse_mode='MarkdownV2')
 
     def show_edit_menu(chat_id, record_id):
         rec = db.get_record_by_id(record_id)
-        if not rec:
-            send_and_remember_admin(bot, chat_id, "Запись не найдена.")
-            return
+        if not rec: send_and_remember_admin(bot, chat_id, "Запись не найдена."); return
         text = f"✏️ **Редактирование ID {rec['id']}**\n\n👤 Имя: `{rec['name']}`\n🍎 Очки: `{rec['score']}`\n⏱️ Время: `{rec['duration']}` сек.\n\nЧто хотите изменить?"
         markup = InlineKeyboardMarkup(row_width=2)
-        markup.add(InlineKeyboardButton("📝 Имя", callback_data=f"admin_edit_field_{record_id}_name"))
-        markup.add(InlineKeyboardButton("🔢 Очки", callback_data=f"admin_edit_field_{record_id}_score"))
-        markup.add(InlineKeyboardButton("⏱️ Время", callback_data=f"admin_edit_field_{record_id}_duration"))
-        markup.add(InlineKeyboardButton("🗑️ Удалить запись", callback_data=f"admin_delete_one_{record_id}"))
-        markup.add(InlineKeyboardButton("🔙 Назад к списку", callback_data="admin_list"))
+        markup.add(InlineKeyboardButton("📝 Имя", callback_data=f"admin_edit_field_{record_id}_name"),
+                   InlineKeyboardButton("🔢 Очки", callback_data=f"admin_edit_field_{record_id}_score"),
+                   InlineKeyboardButton("⏱️ Время", callback_data=f"admin_edit_field_{record_id}_duration"),
+                   InlineKeyboardButton("🗑️ Удалить запись", callback_data=f"admin_delete_one_{record_id}"),
+                   InlineKeyboardButton("🔙 Назад к списку", callback_data="admin_list"))
         send_and_remember_admin(bot, chat_id, text, reply_markup=markup, parse_mode='MarkdownV2')
 
     def ask_for_new_value(chat_id, record_id, field):
-        field_names = {'name': 'имя', 'score': 'очки', 'duration': 'время \\(' + 'сек' + '\\)'}
+        field_names = {'name':'имя','score':'очки','duration':'время \\(' + 'сек' + '\\)'}
         send_and_remember_admin(bot, chat_id, f"Введите новое значение для поля **{field_names[field]}** \\(ID {record_id}\\):", parse_mode='MarkdownV2')
-        state.user_states[chat_id] = {'action': 'edit', 'record_id': record_id, 'field': field}
+        state.user_states[chat_id] = {'action':'edit','record_id':record_id,'field':field}
 
     def add_test_record(chat_id):
-        test_names = ["Test", "Test2", "Атощко", "Atoo_o", "Anonymous"]
-        name = random.choice(test_names) + str(random.randint(1, 99))
-        score = random.randint(50, 500)
-        duration = random.randint(20, 120)
+        test_names = ["Test","Test2","Атощко","Atoo_o","Anonymous"]
+        name = random.choice(test_names) + str(random.randint(1,99))
+        score = random.randint(50,500); duration = random.randint(20,120)
         db.save_record(name, score, duration)
         send_and_remember_admin(bot, chat_id, f"✅ Добавлен тестовый рекорд: {name} — {score} очков \\({duration} сек\\.\\)")
         show_admin_main(bot, chat_id)
 
     def show_stats(chat_id):
         stats = db.get_statistics()
-        text = (f"📊 **Статистика**\n\n"
-                f"Всего рекордов: {stats['count']}\n"
-                f"Средний счёт: {stats['avg']}\n"
-                f"Максимальный счёт: {stats['max']}\n"
-                f"Минимальный счёт: {stats['min']}\n")
+        text = (f"📊 **Статистика**\n\nВсего рекордов: {stats['count']}\nСредний счёт: {stats['avg']}\n"
+                f"Максимальный счёт: {stats['max']}\nМинимальный счёт: {stats['min']}\n")
         send_and_remember_admin(bot, chat_id, text, parse_mode='MarkdownV2')
 
     def export_records_json(chat_id):
         records = db.get_all_records()
-        data = []
-        for r in records:
-            data.append({
-                'id': r['id'],
-                'name': r['name'],
-                'score': r['score'],
-                'duration': r['duration'],
-                'timestamp': r['timestamp'],
-                'date': datetime.fromtimestamp(r['timestamp']).strftime("%Y-%m-%d %H:%M:%S")
-            })
+        data = [{'id':r['id'],'name':r['name'],'score':r['score'],'duration':r['duration'],
+                 'timestamp':r['timestamp'],'date':datetime.fromtimestamp(r['timestamp']).strftime("%Y-%m-%d %H:%M:%S")} for r in records]
         json_str = json.dumps(data, indent=2, ensure_ascii=False)
-        file = io.BytesIO(json_str.encode('utf-8'))
-        file.name = "leaderboard_export.json"
+        file = io.BytesIO(json_str.encode('utf-8')); file.name = "leaderboard_export.json"
         bot.send_document(chat_id, file, caption="📁 Экспорт всех рекордов в JSON")
 
     def export_ai_logs_json(db):
         logs = db.get_ai_logs(limit=10000)
-        data = []
-        for log in logs:
-            data.append({
-                'id': log['id'],
-                'user_id': log['user_id'],
-                'username': log['username'],
-                'first_name': log['first_name'],
-                'last_name': log['last_name'],
-                'message': log['message'],
-                'response': log['response'],
-                'timestamp': log['timestamp'],
-                'date': datetime.fromtimestamp(log['timestamp']).strftime("%Y-%m-%d %H:%M:%S")
-            })
+        data = [{'id':l['id'],'user_id':l['user_id'],'username':l['username'],'first_name':l['first_name'],
+                 'last_name':l['last_name'],'message':l['message'],'response':l['response'],
+                 'timestamp':l['timestamp'],'date':datetime.fromtimestamp(l['timestamp']).strftime("%Y-%m-%d %H:%M:%S")} for l in logs]
         return json.dumps(data, indent=2, ensure_ascii=False)
 
-    def show_ai_logs(chat_id, page=0, search_query=None, per_page=10):
-        offset = page * per_page
+    def show_ai_logs(chat_id, page=0, search_query=None, per_page=5):
+        offset = page*per_page
         logs = db.get_ai_logs(limit=per_page, offset=offset, search_query=search_query)
         total = db.count_ai_logs(search_query)
         if not logs:
-            send_and_remember_admin(bot, chat_id, "Логи ИИ пусты.")
-            return
-
+            send_and_remember_admin(bot, chat_id, "Логи ИИ пусты."); return
         text = f"🤖 **Логи ИИ** \\(стр\\. {page+1} из { (total+per_page-1)//per_page if total else 1 }\\)\n\n"
         for log in logs:
             date_str = datetime.fromtimestamp(log['timestamp']).strftime("%d.%m.%y %H:%M")
-            user_info = f"{log['first_name']} {log['last_name']}".strip()
-            if log['username']: user_info += f" (@{log['username']})"
-            user_info += f" [ID:{log['user_id']}]"
-            msg_preview = log['message'][:50] + "…" if len(log['message']) > 50 else log['message']
-            resp_preview = log['response'][:50] + "…" if len(log['response']) > 50 else log['response']
-            text += f"`{date_str}`\n👤 {escape_markdown_v2(user_info)}\n💬 *Q:* {escape_markdown_v2(msg_preview)}\n🤖 *A:* {escape_markdown_v2(resp_preview)}\n\n"
-
-        markup = InlineKeyboardMarkup(row_width=4)
-        if page > 0:
-            markup.add(InlineKeyboardButton("◀ Назад", callback_data=f"ai_logs_page_{page-1}"))
-        if offset + per_page < total:
-            markup.add(InlineKeyboardButton("Вперед ▶", callback_data=f"ai_logs_page_{page+1}"))
+            user_ident = f"@{log['username']}" if log['username'] else f"ID{log['user_id']}"
+            msg_short = log['message'][:30] + "…" if len(log['message'])>30 else log['message']
+            resp_short = log['response'][:30] + "…" if len(log['response'])>30 else log['response']
+            text += f"🔹 Лог #{log['id']} | {escape_markdown_v2(user_ident)} | {date_str}\n💬 {escape_markdown_v2(msg_short)}\n🤖 {escape_markdown_v2(resp_short)}\n\n"
+        markup = InlineKeyboardMarkup(row_width=3)
+        if page>0: markup.add(InlineKeyboardButton("◀ Назад", callback_data=f"ai_logs_page_{page-1}"))
+        if offset+per_page<total: markup.add(InlineKeyboardButton("Вперед ▶", callback_data=f"ai_logs_page_{page+1}"))
         markup.add(InlineKeyboardButton("🔍 Поиск", callback_data="admin_ai_logs_search"))
-        markup.add(InlineKeyboardButton("🗑️ Очистить", callback_data="admin_ai_logs_clear"))
         markup.add(InlineKeyboardButton("🔙 В меню", callback_data="admin_back_to_main"))
-
-        # Кнопки просмотра логов с нумерацией
-        for idx, log in enumerate(logs, start=1):
-            text_btn = f"{idx}. 📄 {log['id']}"
-            markup.add(InlineKeyboardButton(text_btn, callback_data=f"ai_logs_full_{log['id']}"))
-
+        for log in logs:
+            user_btn = f"📄 {log['id']}"
+            if log['username']: user_btn += f" @{log['username']}"
+            markup.add(InlineKeyboardButton(user_btn, callback_data=f"ai_logs_full_{log['id']}"))
         send_and_remember_admin(bot, chat_id, text, reply_markup=markup, parse_mode='MarkdownV2')
 
     def confirm_delete_all(chat_id):
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("✅ ДА, УДАЛИТЬ ВСЁ", callback_data="admin_delete_all_yes"))
-        markup.add(InlineKeyboardButton("❌ НЕТ, ОТМЕНА", callback_data="admin_delete_all_no"))
+        markup.add(InlineKeyboardButton("✅ ДА, УДАЛИТЬ ВСЁ", callback_data="admin_delete_all_yes"),
+                   InlineKeyboardButton("❌ НЕТ, ОТМЕНА", callback_data="admin_delete_all_no"))
         send_and_remember_admin(bot, chat_id, "⚠️ **Вы уверены, что хотите удалить ВСЕ рекорды?** Это действие необратимо.", reply_markup=markup, parse_mode='MarkdownV2')
 
     def delete_one_record(chat_id, record_id):
@@ -381,6 +343,5 @@ def register_admin_callbacks(bot, db):
         if rec:
             db.delete_record(record_id)
             send_and_remember_admin(bot, chat_id, f"✅ Рекорд ID {record_id} удалён.")
-        else:
-            send_and_remember_admin(bot, chat_id, "Запись не найдена.")
+        else: send_and_remember_admin(bot, chat_id, "Запись не найдена.")
         show_records_list(chat_id, page=0)
