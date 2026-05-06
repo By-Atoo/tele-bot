@@ -49,21 +49,15 @@ def register_handlers(bot, db):
         return None
 
     def send_message_to_user(user_id, text, sender_display=None, reply_to_user_id=None):
-        """
-        Отправляет сообщение пользователю. Если указан sender_display, добавляет префикс.
-        Если передан reply_to_user_id, добавляет кнопку «Ответить» с callback на отправителя.
-        """
         if sender_display:
             full_text = f"📨 *От {escape_markdown_v2(sender_display)}:*\n{escape_markdown_v2(text)}"
         else:
             full_text = escape_markdown_v2(text)
-
         kwargs = {'parse_mode': 'MarkdownV2'}
         if reply_to_user_id:
             markup = InlineKeyboardMarkup()
             markup.add(InlineKeyboardButton("💬 Ответить", callback_data=f"reply_to_user_{reply_to_user_id}"))
             kwargs['reply_markup'] = markup
-
         try:
             send_and_remember(user_id, full_text, **kwargs)
             return True
@@ -240,7 +234,7 @@ def register_handlers(bot, db):
     def contact_admin(m):
         db.save_user(m.from_user)
         if not ADMIN_CHAT_ID:
-            send_and_remember(m.chat.id, "⚠️ Не настроено.")
+            send_and_remember(m.chat.id, "⚠️ Админ не настроен.")
             return
         parts = m.text.strip().split(maxsplit=1)
         if len(parts) == 1:
@@ -468,14 +462,16 @@ def register_handlers(bot, db):
             return
         logs_count = db.count_ai_logs(str(target_id))
         banned = target_id in state.banned_users
-        info = (f"👤 *Информация о пользователе*\n\n"
-                f"ID: `{user['user_id']}`\n"
-                f"Username: @{user['username'] or 'не задан'}\n"
-                f"Имя: {user['first_name'] or ''} {user['last_name'] or ''}\n"
-                f"Первый вход: {datetime.fromtimestamp(user['first_seen']).strftime('%d.%m.%Y %H:%M')}\n"
-                f"Последний вход: {datetime.fromtimestamp(user['last_seen']).strftime('%d.%m.%Y %H:%M')}\n"
-                f"Запросов к AI: {logs_count}\n"
-                f"Забанен: {'да' if banned else 'нет'}")
+        info = (
+            f"👤 *Информация о пользователе*\n\n"
+            f"ID: `{user['user_id']}`\n"
+            f"Username: @{escape_markdown_v2(user['username'] or 'не задан')}\n"
+            f"Имя: {escape_markdown_v2(user['first_name'] or '')} {escape_markdown_v2(user['last_name'] or '')}\n"
+            f"Первый вход: {escape_markdown_v2(datetime.fromtimestamp(user['first_seen']).strftime('%d.%m.%Y %H:%M'))}\n"
+            f"Последний вход: {escape_markdown_v2(datetime.fromtimestamp(user['last_seen']).strftime('%d.%m.%Y %H:%M'))}\n"
+            f"Запросов к AI: {logs_count}\n"
+            f"Забанен: {'да' if banned else 'нет'}"
+        )
         send_and_remember(m.chat.id, info, parse_mode='MarkdownV2')
 
     # ---------- Text messages (AI) ----------
@@ -565,8 +561,11 @@ def register_handlers(bot, db):
                     with state.state_lock: state.user_states.pop(message.chat.id, None)
                     return
                 db.delete_ai_logs_by_user(user['user_id'])
-                send_and_remember(message.chat.id, f"✅ Логи пользователя @{user['username'] or user['user_id']} удалены.")
+                send_and_remember(message.chat.id, f"✅ Логи пользователя @{escape_markdown_v2(user['username'] or str(user['user_id']))} удалены.")
                 with state.state_lock: state.user_states.pop(message.chat.id, None)
+                return
+
+            elif action in ('search','ai_logs_search','edit'):
                 return
 
         if ADMIN_CHAT_ID:
