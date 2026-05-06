@@ -240,7 +240,7 @@ def register_handlers(bot, db):
     def contact_admin(m):
         db.save_user(m.from_user)
         if not ADMIN_CHAT_ID:
-            send_and_remember(m.chat.id, "⚠️ Админ не настроен.")
+            send_and_remember(m.chat.id, "⚠️ Не настроено.")
             return
         parts = m.text.strip().split(maxsplit=1)
         if len(parts) == 1:
@@ -322,11 +322,9 @@ def register_handlers(bot, db):
         sender_display = f"@{m.from_user.username}" if m.from_user.username else m.from_user.first_name
         sender_id = m.from_user.id
 
-        # Отправляем получателю с кнопкой «Ответить» на отправителя
         if send_message_to_user(target_id, message_text, sender_display=sender_display, reply_to_user_id=sender_id):
             if not is_admin(m.chat.id):
                 with state.state_lock: state.cooldowns[sender_id] = (target_id, time.time())
-            # Уведомление админу (без кнопки)
             if ADMIN_CHAT_ID:
                 adm_notify = f"📨 Переслано:\n{escape_markdown_v2(sender_display)} [ID:{sender_id}] → {escape_markdown_v2(display)}\n💬 {escape_markdown_v2(message_text)}"
                 send_and_remember(ADMIN_CHAT_ID, adm_notify, parse_mode='MarkdownV2')
@@ -484,7 +482,6 @@ def register_handlers(bot, db):
     @bot.message_handler(content_types=['text'])
     def handle_text(message):
         if message.text and message.text.startswith('/'): return
-        # Запоминаем сообщение пользователя для последующей очистки
         remember_user_message(message.chat.id, message.message_id)
 
         db.save_user(message.from_user)
@@ -534,11 +531,9 @@ def register_handlers(bot, db):
                         prev_target, _ = state.cooldowns[target_id]
                         if prev_target == sender_id: del state.cooldowns[target_id]
 
-                # Отправляем получателю с кнопкой «Ответить» на текущего отправителя
                 if send_message_to_user(target_id, reply_text, sender_display=sender_display, reply_to_user_id=sender_id):
                     if not is_admin(message.chat.id):
                         with state.state_lock: state.cooldowns[sender_id] = (target_id, time.time())
-                    # Уведомление админу без кнопки
                     if ADMIN_CHAT_ID:
                         adm_notify = f"📨 Переслано:\n{escape_markdown_v2(sender_display)} [ID:{sender_id}] → {escape_markdown_v2(display)}\n💬 {escape_markdown_v2(reply_text)}"
                         send_and_remember(ADMIN_CHAT_ID, adm_notify, parse_mode='MarkdownV2')
@@ -574,7 +569,6 @@ def register_handlers(bot, db):
                 with state.state_lock: state.user_states.pop(message.chat.id, None)
                 return
 
-        # Уведомление админу о новом вопросе к ИИ (без кнопки «Ответить»)
         if ADMIN_CHAT_ID:
             user = message.from_user
             user_str = f"@{user.username}" if user.username else user.first_name
@@ -583,7 +577,6 @@ def register_handlers(bot, db):
             if len(message.text) > 100: preview += '…'
             text = messages.NOTIFY_TEXT.format(user=safe_user, preview=preview)
             markup = InlineKeyboardMarkup()
-            # Последний лог
             logs = db.get_ai_logs(limit=1, search_query=str(user.id))
             if logs:
                 markup.add(InlineKeyboardButton(messages.VIEW_LOG, callback_data=f"ai_logs_full_{logs[0]['id']}"))
