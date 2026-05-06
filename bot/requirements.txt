@@ -1,8 +1,0 @@
-pyTelegramBotAPI
-flask
-flask-cors
-flask-limiter
-watchdog
-telethon
-openai
-requests
