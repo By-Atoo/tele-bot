@@ -1,20 +1,13 @@
-import logging
-import os
-import sys
-import time
-from collections import defaultdict
+# handlers.py
+import logging, os, sys, time
 from datetime import datetime
-
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup
-
 from config import get_config
 from utils import escape_markdown_v2, split_message, format_as_quote, safe_send
 from ai import ask_ai, clear_all_histories, clear_user_history
-import state
-import messages
+import state, messages
 
 logger = logging.getLogger(__name__)
-
 
 def register_handlers(bot, db):
     cfg = get_config()
@@ -32,21 +25,17 @@ def register_handlers(bot, db):
     def send_to_admin(message_obj, text):
         user = message_obj.from_user
         user_info = f"👤 {user.first_name or ''} {user.last_name or ''}"
-        if user.username:
-            user_info += f" (@{user.username})"
+        if user.username: user_info += f" (@{user.username})"
         user_info += f" [ID:{user.id}]"
-        adm_text = (
-            f"📨 *Сообщение от пользователя:*\n"
-            f"{escape_markdown_v2(user_info)}\n\n"
-            f"💬 {escape_markdown_v2(text)}"
-        )
+        adm_text = (f"📨 *Сообщение от пользователя:*\n"
+                    f"{escape_markdown_v2(user_info)}\n\n💬 {escape_markdown_v2(text)}")
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("💬 Ответить", callback_data=f"reply_to_user_{user.id}"))
         try:
             send_and_remember(ADMIN_CHAT_ID, adm_text, reply_markup=markup, parse_mode='MarkdownV2')
             return True
         except Exception as e:
-            logger.error(f"Не удалось отправить сообщение админу: {e}")
+            logger.error(f"Failed to notify admin: {e}")
             return False
 
     def find_user_by_username(username):
@@ -65,29 +54,21 @@ def register_handlers(bot, db):
             send_and_remember(user_id, full_text, parse_mode='MarkdownV2')
             return True
         except Exception as e:
-            logger.error(f"Не удалось отправить сообщение пользователю {user_id}: {e}")
+            logger.error(f"Failed to send to {user_id}: {e}")
             return False
 
     def send_broadcast(text, admin_chat_id=None):
         users = db.get_all_users()
-        success = []
-        fail = []
+        success, fail = [], []
         for u in users:
-            if send_message_to_user(u['user_id'], text):
-                success.append(u)
-            else:
-                fail.append(u)
+            if send_message_to_user(u['user_id'], text): success.append(u)
+            else: fail.append(u)
         if admin_chat_id:
             errors_list = ""
             if fail:
                 errors_list = "Ошибки у:\n" + "\n".join(
-                    f"`{u['user_id']}` {escape_markdown_v2(u.get('first_name', '') or '')}" for u in fail
-                )
-            report = messages.BROADCAST_STATS.format(
-                success=len(success),
-                fail=len(fail),
-                errors_list=errors_list
-            )
+                    f"`{u['user_id']}` {escape_markdown_v2(u.get('first_name','') or '')}" for u in fail)
+            report = messages.BROADCAST_STATS.format(success=len(success), fail=len(fail), errors_list=errors_list)
             send_and_remember(admin_chat_id, report, parse_mode='MarkdownV2')
         return success, fail
 
@@ -95,11 +76,11 @@ def register_handlers(bot, db):
         try:
             bot_ref.stop_polling()
         except Exception as e:
-            logger.warning(f"Не удалось остановить поллинг: {e}")
+            logger.warning(f"Polling stop error: {e}")
         finally:
             python = sys.executable
             args = [python] + sys.argv
-            logger.info(f"Перезапуск: {args}")
+            logger.info(f"Restarting: {args}")
             os.execv(python, args)
 
     def check_ban(user_id):
@@ -108,16 +89,28 @@ def register_handlers(bot, db):
     def check_cooldown(user_id):
         if user_id not in state.cooldowns:
             return True, 0
-        target_id, timestamp = state.cooldowns[user_id]
+        target_id, ts = state.cooldowns[user_id]
         now = time.time()
-        if now - timestamp >= 600:
-            with state.state_lock:
-                state.cooldowns.pop(user_id, None)
+        if now - ts >= 600:
+            with state.state_lock: del state.cooldowns[user_id]
             return True, 0
-        remaining = int(600 - (now - timestamp))
+        remaining = int(600 - (now - ts))
         return False, remaining
 
-    # =================== commands ===================
+    def clear_chat(chat_id, send_start=False):
+        with state.state_lock:
+            mids = state.bot_messages.pop(chat_id, [])
+        deleted = 0
+        for mid in mids:
+            try:
+                bot.delete_message(chat_id, mid)
+                deleted += 1
+            except: pass
+        if send_start:
+            send_and_remember(chat_id, messages.START_MSG)
+        return deleted
+
+    # ---------- Commands ----------
     @bot.message_handler(commands=['start'])
     def start_cmd(m):
         db.save_user(m.from_user)
@@ -158,11 +151,7 @@ def register_handlers(bot, db):
         if len(parts) == 1:
             sent = send_and_remember(m.chat.id, messages.PROMPT_ASK)
             with state.state_lock:
-                state.user_states[m.chat.id] = {
-                    'action': 'awaiting_prompt',
-                    'command_msg_id': m.message_id,
-                    'hint_msg_id': sent.message_id
-                }
+                state.user_states[m.chat.id] = {'action':'awaiting_prompt','command_msg_id':m.message_id,'hint_msg_id':sent.message_id}
             return
         new_prompt = parts[1].strip()
         if not new_prompt:
@@ -180,54 +169,62 @@ def register_handlers(bot, db):
             send_and_remember(m.chat.id, messages.BAN_MESSAGE)
             return
         user_id = m.from_user.id
-        with state.state_lock:
-            state.user_system_prompts.pop(user_id, None)
+        with state.state_lock: state.user_system_prompts.pop(user_id, None)
         clear_user_history(user_id)
         send_and_remember(m.chat.id, messages.PROMPT_CLEAR_DEFAULT)
+
+    @bot.message_handler(commands=['promt_check'])
+    def prompt_check_cmd(m):
+        db.save_user(m.from_user)
+        if check_ban(m.from_user.id):
+            send_and_remember(m.chat.id, messages.BAN_MESSAGE)
+            return
+        user_id = m.from_user.id
+        with state.state_lock:
+            prompt = state.user_system_prompts.get(user_id, cfg['system_prompt'])
+        full = escape_markdown_v2(prompt)
+        send_and_remember(m.chat.id, messages.PROMPT_CHECK.format(prompt=full), parse_mode='MarkdownV2')
 
     @bot.message_handler(commands=['clear'])
     def clear_chat_cmd(m):
         db.save_user(m.from_user)
-        chat_id = m.chat.id
-        with state.state_lock:
-            mids = state.bot_messages.get(chat_id, [])
-        if not mids:
-            send_and_remember(chat_id, "Нет сохранённых сообщений для удаления.")
+        deleted = clear_chat(m.chat.id)
+        if deleted == 0:
+            send_and_remember(m.chat.id, "Нет сохранённых сообщений для удаления.")
+        else:
+            send_and_remember(m.chat.id, f"✅ Удалено {deleted} сообщений.")
+
+    @bot.message_handler(commands=['clear_all'])
+    def clear_all_cmd(m):
+        db.save_user(m.from_user)
+        if not is_admin(m.chat.id):
+            send_and_remember(m.chat.id, messages.ADMIN_DENIED)
             return
-        deleted = 0
-        for mid in mids:
-            try:
-                bot.delete_message(chat_id, mid)
-                deleted += 1
-            except Exception as e:
-                logger.warning(f"Не удалось удалить сообщение {mid}: {e}")
-        with state.state_lock:
-            state.bot_messages[chat_id] = []
-        send_and_remember(chat_id, f"✅ Удалено {deleted} сообщений.")
+        users = db.get_all_users()
+        total = 0
+        for u in users:
+            total += clear_chat(u['user_id'], send_start=True)
+        total += clear_chat(m.chat.id, send_start=True)
+        send_and_remember(m.chat.id, f"✅ Удалено {total} сообщений по всем чатам и отправлено приветствие.")
 
     @bot.message_handler(commands=['cancel'])
     def cancel_cmd(m):
         db.save_user(m.from_user)
-        with state.state_lock:
-            st = state.user_states.pop(m.chat.id, None)
+        with state.state_lock: st = state.user_states.pop(m.chat.id, None)
         if st:
             action = st.get('action')
-            if action in ('awaiting_admin_message', 'awaiting_prompt', 'awaiting_reply', 'awaiting_broadcast'):
-                try:
-                    bot.delete_message(m.chat.id, st['hint_msg_id'])
-                except:
-                    pass
+            if action in ('awaiting_admin_message','awaiting_prompt','awaiting_reply','awaiting_broadcast'):
+                try: bot.delete_message(m.chat.id, st['hint_msg_id'])
+                except: pass
                 send_and_remember(m.chat.id, messages.CANCEL_DONE)
             else:
                 send_and_remember(m.chat.id, messages.CANCEL_NOTHING)
         else:
             send_and_remember(m.chat.id, messages.CANCEL_NOTHING)
-        try:
-            bot.delete_message(m.chat.id, m.message_id)
-        except:
-            pass
+        try: bot.delete_message(m.chat.id, m.message_id)
+        except: pass
 
-    @bot.message_handler(commands=['mA'])
+    @bot.message_handler(commands=['mA','ma'])
     def contact_admin(m):
         db.save_user(m.from_user)
         if not ADMIN_CHAT_ID:
@@ -237,11 +234,7 @@ def register_handlers(bot, db):
         if len(parts) == 1:
             sent = send_and_remember(m.chat.id, messages.MA_ASK)
             with state.state_lock:
-                state.user_states[m.chat.id] = {
-                    'action': 'awaiting_admin_message',
-                    'command_msg_id': m.message_id,
-                    'hint_msg_id': sent.message_id
-                }
+                state.user_states[m.chat.id] = {'action':'awaiting_admin_message','command_msg_id':m.message_id,'hint_msg_id':sent.message_id}
             return
         user_msg = parts[1].strip()
         if not user_msg:
@@ -249,10 +242,8 @@ def register_handlers(bot, db):
             return
         if send_to_admin(m, user_msg):
             send_and_remember(m.chat.id, messages.MA_SENT)
-            try:
-                bot.delete_message(m.chat.id, m.message_id)
-            except:
-                pass
+            try: bot.delete_message(m.chat.id, m.message_id)
+            except: pass
         else:
             send_and_remember(m.chat.id, messages.MA_FAIL)
 
@@ -265,19 +256,16 @@ def register_handlers(bot, db):
         from admin import show_admin_main
         show_admin_main(bot, m.chat.id)
 
-    # ---------- /m ----------
     @bot.message_handler(commands=['m'])
     def message_cmd(m):
         db.save_user(m.from_user)
         if check_ban(m.from_user.id):
             send_and_remember(m.chat.id, messages.BAN_MESSAGE)
             return
-
         parts = m.text.strip().split(maxsplit=2)
         if len(parts) < 2:
             send_and_remember(m.chat.id, messages.M_USAGE, parse_mode='MarkdownV2')
             return
-
         target = parts[1].strip()
         message_text = parts[2].strip() if len(parts) > 2 else None
 
@@ -288,22 +276,16 @@ def register_handlers(bot, db):
             if not message_text:
                 sent = send_and_remember(m.chat.id, messages.BROADCAST_ASK)
                 with state.state_lock:
-                    state.user_states[m.chat.id] = {
-                        'action': 'awaiting_broadcast',
-                        'command_msg_id': m.message_id,
-                        'hint_msg_id': sent.message_id
-                    }
+                    state.user_states[m.chat.id] = {'action':'awaiting_broadcast','command_msg_id':m.message_id,'hint_msg_id':sent.message_id}
                 return
             send_broadcast(message_text, admin_chat_id=m.chat.id)
             return
 
+        # find target
         try:
             target_id = int(target)
             user = db.get_user_by_id(target_id)
-            if user:
-                display = f"@{user['username']} [ID:{target_id}]" if user['username'] else f"ID:{target_id}"
-            else:
-                display = f"ID:{target_id}"
+            display = f"@{user['username']} [ID:{target_id}]" if user and user['username'] else f"ID:{target_id}"
         except ValueError:
             target = target.lstrip('@')
             user = find_user_by_username(target)
@@ -313,45 +295,32 @@ def register_handlers(bot, db):
             target_id = user['user_id']
             display = f"@{user['username']} [ID:{target_id}]" if user['username'] else f"ID:{target_id}"
 
-        # -------------------- Ограничение --------------------
         if not is_admin(m.chat.id):
-            can_send, cooldown = check_cooldown(m.from_user.id)
+            can_send, cd = check_cooldown(m.from_user.id)
             if not can_send:
-                minutes = cooldown // 60 + 1
-                send_and_remember(m.chat.id, messages.M_COOLDOWN_ACTIVE.format(time_left=cooldown//60))
+                send_and_remember(m.chat.id, messages.M_COOLDOWN_ACTIVE.format(time_left=cd//60))
                 return
 
         if not message_text:
-            sent = send_and_remember(m.chat.id,
-                                     f"✉️ Введите сообщение для {display}.\nДля отмены — /cancel")
+            sent = send_and_remember(m.chat.id, f"✉️ Введите сообщение для {display}.\nДля отмены — /cancel")
             with state.state_lock:
-                state.user_states[m.chat.id] = {
-                    'action': 'awaiting_reply',
-                    'target_id': target_id,
-                    'target_display': display,
-                    'command_msg_id': m.message_id,
-                    'hint_msg_id': sent.message_id
-                }
+                state.user_states[m.chat.id] = {'action':'awaiting_reply','target_id':target_id,'target_display':display,'command_msg_id':m.message_id,'hint_msg_id':sent.message_id}
             return
 
-        sender_display = f"{m.from_user.first_name or ''}"
-        if m.from_user.username:
-            sender_display = f"@{m.from_user.username}"
+        sender_display = f"@{m.from_user.username}" if m.from_user.username else m.from_user.first_name
         sender_id = m.from_user.id
 
         if send_message_to_user(target_id, message_text, sender_display=sender_display):
             if not is_admin(m.chat.id):
-                with state.state_lock:
-                    state.cooldowns[sender_id] = (target_id, time.time())
+                with state.state_lock: state.cooldowns[sender_id] = (target_id, time.time())
+            # уведомление админу с кнопкой ответа отправителю
             if ADMIN_CHAT_ID:
-                adm_notify = (
-                    f"📨 Переслано:\n"
-                    f"{escape_markdown_v2(sender_display)} [ID:{sender_id}] → {escape_markdown_v2(display)}\n"
-                    f"💬 {escape_markdown_v2(message_text)}"
-                )
-                send_and_remember(ADMIN_CHAT_ID, adm_notify, parse_mode='MarkdownV2')
-            safe_display = escape_markdown_v2(display)
-            send_and_remember(m.chat.id, messages.M_SENT_USER.format(user_display=safe_display),
+                adm_notify = (f"📨 Переслано:\n{escape_markdown_v2(sender_display)} [ID:{sender_id}] → {escape_markdown_v2(display)}\n"
+                              f"💬 {escape_markdown_v2(message_text)}")
+                markup = InlineKeyboardMarkup()
+                markup.add(InlineKeyboardButton("💬 Ответить", callback_data=f"reply_to_user_{sender_id}"))
+                send_and_remember(ADMIN_CHAT_ID, adm_notify, reply_markup=markup, parse_mode='MarkdownV2')
+            send_and_remember(m.chat.id, messages.M_SENT_USER.format(user_display=escape_markdown_v2(display)),
                               parse_mode='MarkdownV2')
         else:
             send_and_remember(m.chat.id, messages.MA_FAIL)
@@ -367,29 +336,30 @@ def register_handlers(bot, db):
             send_and_remember(m.chat.id, "😕 Нет пользователей.")
             return
         text = "👥 *Список пользователей:*\n\n"
-        for i, u in enumerate(users, 1):
+        for i, u in enumerate(users,1):
             name = u['first_name'] or ""
-            if u['last_name']:
-                name += f" {u['last_name']}"
+            if u['last_name']: name += f" {u['last_name']}"
             username = f"@{u['username']}" if u['username'] else "нет username"
             last_seen = datetime.fromtimestamp(u['last_seen']).strftime("%d.%m.%y %H:%M")
-            text += f"{i}\\. `{u['user_id']}` \\- {escape_markdown_v2(name)} \\({escape_markdown_v2(username)}\\)\n"
-            text += f"   🕒 *Последняя активность:* {escape_markdown_v2(last_seen)}\n\n"
+            text += (f"{i}\\. `{u['user_id']}` \\- {escape_markdown_v2(name)} \\({escape_markdown_v2(username)}\\)\n"
+                     f"   🕒 *Последняя активность:* {escape_markdown_v2(last_seen)}\n\n")
             if len(text) > 3500:
                 send_and_remember(m.chat.id, text, parse_mode='MarkdownV2')
                 text = ""
-        if text:
-            send_and_remember(m.chat.id, text, parse_mode='MarkdownV2')
+        if text: send_and_remember(m.chat.id, text, parse_mode='MarkdownV2')
 
     @bot.message_handler(commands=['top'])
     def top_msg(m):
         db.save_user(m.from_user)
+        if check_ban(m.from_user.id):
+            send_and_remember(m.chat.id, messages.BAN_MESSAGE)
+            return
         records = db.get_top_records(20)
         if not records:
             send_and_remember(m.chat.id, "Пусто.")
             return
         text = "🏆 ТАБЛИЦА ЛИДЕРОВ 🏆\n\n"
-        for i, r in enumerate(records, 1):
+        for i,r in enumerate(records,1):
             text += f"{i}. {r['name']} — {r['score']} очков ({r['duration']} сек.)\n"
         send_and_remember(m.chat.id, text)
 
@@ -407,14 +377,11 @@ def register_handlers(bot, db):
         except Exception as e:
             send_and_remember(m.chat.id, f"❌ Ошибка перезагрузки конфига: {e}")
             return
-        try:
-            bot.send_message(m.chat.id, messages.RELOAD_OK, parse_mode='MarkdownV2')
-        except Exception as e:
-            logger.error(f"Не удалось отправить сообщение перед перезапуском: {e}")
+        try: bot.send_message(m.chat.id, messages.RELOAD_OK, parse_mode='MarkdownV2')
+        except Exception as e: logger.error(f"Reload notify error: {e}")
         time.sleep(0.5)
         restart_bot(bot)
 
-    # -------------------- ban / unban --------------------
     @bot.message_handler(commands=['ban'])
     def ban_cmd(m):
         db.save_user(m.from_user)
@@ -429,7 +396,6 @@ def register_handlers(bot, db):
         try:
             target_id = int(target)
         except ValueError:
-            # возможно username
             target = target.lstrip('@')
             user = find_user_by_username(target)
             if not user:
@@ -442,8 +408,7 @@ def register_handlers(bot, db):
         if target_id in state.banned_users:
             send_and_remember(m.chat.id, messages.BAN_ALREADY)
         else:
-            with state.state_lock:
-                state.banned_users.add(target_id)
+            with state.state_lock: state.banned_users.add(target_id)
             send_and_remember(m.chat.id, messages.BAN_SUCCESS)
 
     @bot.message_handler(commands=['unban'])
@@ -473,24 +438,59 @@ def register_handlers(bot, db):
             else:
                 send_and_remember(m.chat.id, messages.UNBAN_NOT_BANNED)
 
-    # =================== text (AI) ===================
+    @bot.message_handler(commands=['id_check'])
+    def id_check_cmd(m):
+        db.save_user(m.from_user)
+        if not is_admin(m.chat.id):
+            send_and_remember(m.chat.id, messages.ADMIN_DENIED)
+            return
+        parts = m.text.strip().split()
+        if len(parts) != 2:
+            send_and_remember(m.chat.id, "Использование: /id_check user_id")
+            return
+        target = parts[1]
+        try:
+            target_id = int(target)
+        except ValueError:
+            target = target.lstrip('@')
+            user = find_user_by_username(target)
+            if not user:
+                send_and_remember(m.chat.id, messages.BAN_USER_NOT_FOUND)
+                return
+            target_id = user['user_id']
+        user = db.get_user_by_id(target_id)
+        if not user:
+            send_and_remember(m.chat.id, "❌ Пользователь не найден в базе.")
+            return
+        # дополнительные данные
+        logs_count = db.count_ai_logs(str(target_id))
+        banned = target_id in state.banned_users
+        info = (
+            f"👤 *Информация о пользователе*\n\n"
+            f"ID: `{user['user_id']}`\n"
+            f"Username: @{user['username'] or 'не задан'}\n"
+            f"Имя: {user['first_name'] or ''} {user['last_name'] or ''}\n"
+            f"Первый вход: {datetime.fromtimestamp(user['first_seen']).strftime('%d.%m.%Y %H:%M')}\n"
+            f"Последний вход: {datetime.fromtimestamp(user['last_seen']).strftime('%d.%m.%Y %H:%M')}\n"
+            f"Запросов к AI: {logs_count}\n"
+            f"Забанен: {'да' if banned else 'нет'}"
+        )
+        send_and_remember(m.chat.id, info, parse_mode='MarkdownV2')
+
+    # ---------- Text messages (AI) ----------
     @bot.message_handler(content_types=['text'])
     def handle_text(message):
-        if message.text and message.text.startswith('/'):
-            return
-
+        if message.text and message.text.startswith('/'): return
         db.save_user(message.from_user)
         user_id = message.from_user.id
-
         if check_ban(user_id):
             send_and_remember(message.chat.id, messages.BAN_MESSAGE)
             return
 
-        with state.state_lock:
-            st = state.user_states.get(message.chat.id)
+        with state.state_lock: st = state.user_states.get(message.chat.id)
         if st:
             action = st.get('action')
-            if action == 'awaiting_admin_message':    # не проверяем бан, т.к. уже разрешён /mA
+            if action == 'awaiting_admin_message':
                 text = message.text.strip()
                 if not text:
                     send_and_remember(message.chat.id, messages.MA_EMPTY + " Для отмены /cancel")
@@ -499,14 +499,7 @@ def register_handlers(bot, db):
                     send_and_remember(message.chat.id, messages.MA_SENT)
                 else:
                     send_and_remember(message.chat.id, messages.MA_FAIL)
-                try:
-                    bot.delete_message(message.chat.id, st['command_msg_id'])
-                    bot.delete_message(message.chat.id, st['hint_msg_id'])
-                    bot.delete_message(message.chat.id, message.message_id)
-                except:
-                    pass
-                with state.state_lock:
-                    state.user_states.pop(message.chat.id, None)
+                cleanup_state(message, st)
                 return
 
             elif action == 'awaiting_prompt':
@@ -514,18 +507,10 @@ def register_handlers(bot, db):
                 if not new_prompt:
                     send_and_remember(message.chat.id, messages.PROMPT_EMPTY + " Для отмены /cancel")
                     return
-                with state.state_lock:
-                    state.user_system_prompts[user_id] = new_prompt
+                with state.state_lock: state.user_system_prompts[user_id] = new_prompt
                 clear_user_history(user_id)
                 send_and_remember(message.chat.id, messages.PROMPT_SET)
-                try:
-                    bot.delete_message(message.chat.id, st['command_msg_id'])
-                    bot.delete_message(message.chat.id, st['hint_msg_id'])
-                    bot.delete_message(message.chat.id, message.message_id)
-                except:
-                    pass
-                with state.state_lock:
-                    state.user_states.pop(message.chat.id, None)
+                cleanup_state(message, st)
                 return
 
             elif action == 'awaiting_reply':
@@ -535,43 +520,28 @@ def register_handlers(bot, db):
                     return
                 target_id = st['target_id']
                 display = st.get('target_display', f"ID:{target_id}")
-                sender_display = f"{message.from_user.first_name or ''}"
-                if message.from_user.username:
-                    sender_display = f"@{message.from_user.username}"
+                sender_display = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
                 sender_id = message.from_user.id
 
                 with state.state_lock:
                     if target_id in state.cooldowns:
                         prev_target, _ = state.cooldowns[target_id]
-                        if prev_target == sender_id:
-                            del state.cooldowns[target_id]
-                            logger.info(f"Cooldown снят для {target_id}")
+                        if prev_target == sender_id: del state.cooldowns[target_id]
 
                 if send_message_to_user(target_id, reply_text, sender_display=sender_display):
                     if not is_admin(message.chat.id):
-                        with state.state_lock:
-                            state.cooldowns[sender_id] = (target_id, time.time())
+                        with state.state_lock: state.cooldowns[sender_id] = (target_id, time.time())
                     if ADMIN_CHAT_ID:
-                        adm_notify = (
-                            f"📨 Переслано:\n"
-                            f"{escape_markdown_v2(sender_display)} [ID:{sender_id}] → {escape_markdown_v2(display)}\n"
-                            f"💬 {escape_markdown_v2(reply_text)}"
-                        )
-                        send_and_remember(ADMIN_CHAT_ID, adm_notify, parse_mode='MarkdownV2')
-                    safe_display = escape_markdown_v2(display)
-                    send_and_remember(message.chat.id,
-                                      messages.M_SENT_USER.format(user_display=safe_display),
+                        adm_notify = (f"📨 Переслано:\n{escape_markdown_v2(sender_display)} [ID:{sender_id}] → {escape_markdown_v2(display)}\n"
+                                      f"💬 {escape_markdown_v2(reply_text)}")
+                        markup = InlineKeyboardMarkup()
+                        markup.add(InlineKeyboardButton("💬 Ответить", callback_data=f"reply_to_user_{sender_id}"))
+                        send_and_remember(ADMIN_CHAT_ID, adm_notify, reply_markup=markup, parse_mode='MarkdownV2')
+                    send_and_remember(message.chat.id, messages.M_SENT_USER.format(user_display=escape_markdown_v2(display)),
                                       parse_mode='MarkdownV2')
                 else:
                     send_and_remember(message.chat.id, messages.MA_FAIL)
-                try:
-                    bot.delete_message(message.chat.id, st['command_msg_id'])
-                    bot.delete_message(message.chat.id, st['hint_msg_id'])
-                    bot.delete_message(message.chat.id, message.message_id)
-                except:
-                    pass
-                with state.state_lock:
-                    state.user_states.pop(message.chat.id, None)
+                cleanup_state(message, st)
                 return
 
             elif action == 'awaiting_broadcast':
@@ -580,31 +550,27 @@ def register_handlers(bot, db):
                     send_and_remember(message.chat.id, "⚠️ Сообщение не может быть пустым.")
                     return
                 send_broadcast(broadcast_text, admin_chat_id=message.chat.id)
-                try:
-                    bot.delete_message(message.chat.id, st['command_msg_id'])
-                    bot.delete_message(message.chat.id, st['hint_msg_id'])
-                    bot.delete_message(message.chat.id, message.message_id)
-                except:
-                    pass
-                with state.state_lock:
-                    state.user_states.pop(message.chat.id, None)
+                cleanup_state(message, st)
                 return
 
-            elif action in ('search', 'ai_logs_search', 'edit'):
+            elif action in ('search','ai_logs_search','edit'):
                 return
 
+        # Notify admin about AI question
         if ADMIN_CHAT_ID:
-            user = message.from_user
-            user_str = f"@{user.username}" if user.username else user.first_name
+            user_str = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
             safe_user = escape_markdown_v2(user_str)
             preview = escape_markdown_v2(message.text[:100])
-            if len(message.text) > 100:
-                preview += '…'
+            if len(message.text) > 100: preview += '…'
             text = messages.NOTIFY_TEXT.format(user=safe_user, preview=preview)
-            try:
-                send_and_remember(ADMIN_CHAT_ID, text, parse_mode='MarkdownV2')
-            except Exception as e:
-                logger.exception(f"Не удалось отправить уведомление админу: {e}")
+            markup = InlineKeyboardMarkup()
+            # find last log id for this user
+            logs = db.get_ai_logs(limit=1, search_query=str(message.from_user.id))
+            if logs:
+                markup.add(InlineKeyboardButton(messages.VIEW_LOG, callback_data=f"ai_logs_full_{logs[0]['id']}"))
+            markup.add(InlineKeyboardButton("💬 Ответить", callback_data=f"reply_to_user_{message.from_user.id}"))
+            try: send_and_remember(ADMIN_CHAT_ID, text, reply_markup=markup, parse_mode='MarkdownV2')
+            except Exception as e: logger.exception(f"Admin notify error: {e}")
 
         bot.send_chat_action(message.chat.id, 'typing')
         ai_answer = ask_ai(message, message.text, db)
@@ -612,8 +578,16 @@ def register_handlers(bot, db):
         for part in split_message(formatted):
             send_and_remember(message.chat.id, part, parse_mode='MarkdownV2')
 
-    # =================== media ===================
-    @bot.message_handler(content_types=['photo', 'audio', 'document', 'voice', 'video', 'sticker'])
+    def cleanup_state(message, st):
+        try:
+            bot.delete_message(message.chat.id, st.get('command_msg_id'))
+            bot.delete_message(message.chat.id, st.get('hint_msg_id'))
+            bot.delete_message(message.chat.id, message.message_id)
+        except: pass
+        with state.state_lock: state.user_states.pop(message.chat.id, None)
+
+    # ---------- Media ----------
+    @bot.message_handler(content_types=['photo','audio','document','voice','video','sticker'])
     def handle_media(message):
         db.save_user(message.from_user)
         if check_ban(message.from_user.id):
@@ -633,8 +607,7 @@ def register_handlers(bot, db):
                 bot.send_video(ADMIN_CHAT_ID, message.video.file_id, caption=message.caption)
             elif message.content_type == 'sticker':
                 bot.send_sticker(ADMIN_CHAT_ID, message.sticker.file_id)
-        except Exception as e:
-            logger.error(f"Не удалось переслать медиа админу: {e}")
+        except Exception as e: logger.error(f"Media forward error: {e}")
 
         user = message.from_user
         user_str = f"@{user.username}" if user.username else user.first_name
@@ -642,20 +615,15 @@ def register_handlers(bot, db):
         text = messages.NOTIFY_MEDIA.format(user=safe_user, media_type=message.content_type)
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("💬 Ответить", callback_data=f"reply_to_user_{user.id}"))
-        try:
-            send_and_remember(ADMIN_CHAT_ID, text, reply_markup=markup, parse_mode='MarkdownV2')
-        except Exception as e:
-            logger.error(f"Не удалось отправить уведомление админу: {e}")
-
+        try: send_and_remember(ADMIN_CHAT_ID, text, reply_markup=markup, parse_mode='MarkdownV2')
+        except Exception as e: logger.error(f"Admin media notify error: {e}")
         send_and_remember(message.chat.id, "Слабо текстом? 😏")
 
-    # =================== admin ===================
+    # ---------- Admin-only states ----------
     @bot.message_handler(func=lambda m: m.chat.id in state.user_states and is_admin(m.chat.id))
     def handle_state_message(message):
-        with state.state_lock:
-            user_state = state.user_states.get(message.chat.id)
-        if not user_state:
-            return
+        with state.state_lock: user_state = state.user_states.get(message.chat.id)
+        if not user_state: return
         action = user_state.get('action')
         if action == 'search':
             query = message.text.strip()
@@ -664,21 +632,18 @@ def register_handlers(bot, db):
                 return
             records = db.search_records_by_name(query)
             if not records:
-                send_and_remember(message.chat.id,
-                                  f"Ничего не найдено по запросу `{escape_markdown_v2(query)}`\\.",
+                send_and_remember(message.chat.id, f"Ничего не найдено по запросу `{escape_markdown_v2(query)}`\\.",
                                   parse_mode='MarkdownV2')
             else:
                 from admin import show_records_list
                 show_records_list(bot, db, message.chat.id, records=records)
-            with state.state_lock:
-                state.user_states.pop(message.chat.id, None)
+            with state.state_lock: state.user_states.pop(message.chat.id, None)
         elif action == 'ai_logs_search':
             query = message.text.strip()
             if not query:
                 send_and_remember(message.chat.id, "Пустой запрос.")
                 return
-            with state.state_lock:
-                state.user_states[message.chat.id] = {'action': 'ai_logs_view', 'search_query': query, 'page': 0}
+            with state.state_lock: state.user_states[message.chat.id] = {'action':'ai_logs_view','search_query':query,'page':0}
             from admin import show_ai_logs
             show_ai_logs(bot, db, message.chat.id, page=0, search_query=query)
         elif action == 'edit':
@@ -687,12 +652,10 @@ def register_handlers(bot, db):
             process_edit_value(message, record_id, field)
 
     def process_edit_value(message, record_id, field):
-        if not is_admin(message.chat.id):
-            return
+        if not is_admin(message.chat.id): return
         new_value = message.text.strip()
-        if field in ('score', 'duration'):
-            try:
-                new_value = int(new_value)
+        if field in ('score','duration'):
+            try: new_value = int(new_value)
             except ValueError:
                 send_and_remember(message.chat.id, "❌ Ошибка: введите целое число.")
                 return
@@ -704,5 +667,4 @@ def register_handlers(bot, db):
         except Exception as e:
             send_and_remember(message.chat.id, f"❌ Ошибка при обновлении: {e}")
         finally:
-            with state.state_lock:
-                state.user_states.pop(message.chat.id, None)
+            with state.state_lock: state.user_states.pop(message.chat.id, None)
