@@ -48,6 +48,7 @@ class Database:
         self.conn.commit()
         logger.info(f"DB initialized: {self.db_filename}")
 
+    # ---------- records ----------
     def save_record(self, name, score, duration):
         self.conn.execute('INSERT INTO records (name, score, duration, timestamp) VALUES (?,?,?,?)',
                           (name, score, duration, int(time.time())))
@@ -91,6 +92,7 @@ class Database:
         return {'count': row[0] or 0, 'avg': round(row[1],2) if row[1] else 0,
                 'max': row[2] or 0, 'min': row[3] or 0}
 
+    # ---------- AI logs ----------
     def save_ai_log(self, user_id, username, first_name, last_name, message, response):
         self.conn.execute('''INSERT INTO ai_logs (user_id, username, first_name, last_name, message, response, timestamp)
                              VALUES (?,?,?,?,?,?,?)''',
@@ -140,16 +142,18 @@ class Database:
         self.conn.commit()
         logger.info(f"AI logs deleted for user {user_id}")
 
+    # ---------- users ----------
     def save_user(self, user):
         now = int(time.time())
-        cur = self.conn.cursor()
-        cur.execute('''UPDATE users SET username=?, first_name=?, last_name=?, last_seen=?
-                       WHERE user_id=?''',
-                    (user.username, user.first_name, user.last_name, now, user.id))
-        if cur.rowcount == 0:
-            cur.execute('''INSERT INTO users (user_id, username, first_name, last_name, first_seen, last_seen)
-                           VALUES (?, ?, ?, ?, ?, ?)''',
-                        (user.id, user.username, user.first_name, user.last_name, now, now))
+        # Используем прямое выполнение, избегая вложенных транзакций
+        self.conn.execute('''UPDATE users SET username=?, first_name=?, last_name=?, last_seen=?
+                             WHERE user_id=?''',
+                          (user.username, user.first_name, user.last_name, now, user.id))
+        # Проверяем, была ли затронута строка
+        if self.conn.execute('SELECT changes()').fetchone()[0] == 0:
+            self.conn.execute('''INSERT INTO users (user_id, username, first_name, last_name, first_seen, last_seen)
+                                 VALUES (?, ?, ?, ?, ?, ?)''',
+                              (user.id, user.username, user.first_name, user.last_name, now, now))
         self.conn.commit()
 
     def get_all_users(self):
