@@ -42,7 +42,6 @@ def register_admin_callbacks(bot, db):
     def admin_only(call):
         return is_admin(call.message.chat.id, ADMIN_CHAT_ID)
 
-    # ---- Меню категорий ----
     @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_category_'))
     def handle_category(call):
         if not admin_only(call):
@@ -95,7 +94,6 @@ def register_admin_callbacks(bot, db):
         markup.add(InlineKeyboardButton("🔙 Главное меню", callback_data="admin_back_to_main"))
         send_and_remember_admin(bot, chat_id, "📡 *Трекер онлайн‑статуса* \\(управление в разработке\\)", reply_markup=markup, parse_mode='MarkdownV2')
 
-    # ---- Назад в главное меню ----
     @bot.callback_query_handler(func=lambda call: call.data == 'admin_back_to_main')
     def back_to_main(call):
         if not admin_only(call):
@@ -104,7 +102,6 @@ def register_admin_callbacks(bot, db):
         bot.answer_callback_query(call.id)
         show_admin_main(bot, call.message.chat.id)
 
-    # ---- Список пользователей (с кнопками ответа) ----
     @bot.callback_query_handler(func=lambda call: call.data == 'admin_list_users')
     def list_users_callback(call):
         if not admin_only(call):
@@ -137,7 +134,6 @@ def register_admin_callbacks(bot, db):
         else:
             send_and_remember_admin(bot, call.message.chat.id, text, reply_markup=markup, parse_mode='MarkdownV2')
 
-    # ---- Кнопка «Ответить» (универсальная) ----
     @bot.callback_query_handler(func=lambda call: call.data.startswith('reply_to_user_'))
     def reply_button_callback(call):
         if not admin_only(call):
@@ -156,7 +152,6 @@ def register_admin_callbacks(bot, db):
                 'target_display': display
             }
 
-    # ---- Меню удаления логов ----
     @bot.callback_query_handler(func=lambda call: call.data == 'admin_ai_logs_delete_menu')
     def delete_logs_menu(call):
         if not admin_only(call):
@@ -190,7 +185,6 @@ def register_admin_callbacks(bot, db):
         with state.state_lock:
             state.user_states[call.message.chat.id] = {'action': 'awaiting_ai_logs_clear_user'}
 
-    # ---- Остальные callback'и (admin_*, ai_logs_*) ----
     @bot.callback_query_handler(func=lambda call: call.data.startswith('admin_') or call.data.startswith('ai_logs_') or call.data == 'admin_back_to_menu')
     def handle_legacy_callbacks(call):
         if not admin_only(call):
@@ -241,7 +235,6 @@ def register_admin_callbacks(bot, db):
                     f"💬 *Вопрос:*\n{escape_markdown_v2(log['message'])}\n\n"
                     f"🤖 *Ответ:*\n{escape_markdown_v2(log['response'])}"
                 )
-                # Отправляем без кнопки "Ответить"
                 for part in split_message(full_text):
                     send_and_remember_admin(bot, call.message.chat.id, part, parse_mode='MarkdownV2')
             else:
@@ -273,7 +266,6 @@ def register_admin_callbacks(bot, db):
         elif data == 'admin_back_to_menu':
             show_admin_main(bot, call.message.chat.id)
 
-    # ---- Вспомогательные функции ----
     def show_records_list(chat_id, page=0, records=None, per_page=5):
         if records is None:
             records = db.get_all_records()
@@ -384,7 +376,6 @@ def register_admin_callbacks(bot, db):
             send_and_remember_admin(bot, chat_id, "Логи ИИ пусты.")
             return
 
-        # Компактный вывод: одна строка на лог с ID, username, датой и обрезанными сообщениями
         text = f"🤖 **Логи ИИ** \\(стр\\. {page+1} из { (total+per_page-1)//per_page if total else 1 }\\)\n\n"
         for log in logs:
             date_str = datetime.fromtimestamp(log['timestamp']).strftime("%d.%m.%y %H:%M")
@@ -405,7 +396,6 @@ def register_admin_callbacks(bot, db):
         markup.add(InlineKeyboardButton("🔍 Поиск", callback_data="admin_ai_logs_search"))
         markup.add(InlineKeyboardButton("🔙 В меню", callback_data="admin_back_to_main"))
 
-        # Компактные кнопки просмотра каждого лога
         for log in logs:
             label = f"📄 {log['id']}"
             if log['username']:
