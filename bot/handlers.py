@@ -22,6 +22,9 @@ def register_handlers(bot, db):
             state.bot_messages[chat_id].append(msg.message_id)
         return msg
 
+    def remember_user_message(chat_id, message_id):
+        state.bot_messages[chat_id].append(message_id)
+
     def send_to_admin(message_obj, text):
         user = message_obj.from_user
         user_info = f"👤 {user.first_name or ''} {user.last_name or ''}"
@@ -45,13 +48,24 @@ def register_handlers(bot, db):
                 return u
         return None
 
-    def send_message_to_user(user_id, text, sender_display=None):
+    def send_message_to_user(user_id, text, sender_display=None, reply_to_user_id=None):
+        """
+        Отправляет сообщение пользователю. Если указан sender_display, добавляет префикс.
+        Если передан reply_to_user_id, добавляет кнопку «Ответить» с callback на отправителя.
+        """
         if sender_display:
             full_text = f"📨 *От {escape_markdown_v2(sender_display)}:*\n{escape_markdown_v2(text)}"
         else:
             full_text = escape_markdown_v2(text)
+
+        kwargs = {'parse_mode': 'MarkdownV2'}
+        if reply_to_user_id:
+            markup = InlineKeyboardMarkup()
+            markup.add(InlineKeyboardButton("💬 Ответить", callback_data=f"reply_to_user_{reply_to_user_id}"))
+            kwargs['reply_markup'] = markup
+
         try:
-            send_and_remember(user_id, full_text, parse_mode='MarkdownV2')
+            send_and_remember(user_id, full_text, **kwargs)
             return True
         except Exception as e:
             logger.error(f"Failed to send to {user_id}: {e}")
@@ -75,8 +89,7 @@ def register_handlers(bot, db):
     def restart_bot(bot_ref):
         try:
             bot_ref.stop_polling()
-        except Exception as e:
-            logger.warning(f"Polling stop error: {e}")
+        except: pass
         finally:
             python = sys.executable
             args = [python] + sys.argv
@@ -89,13 +102,12 @@ def register_handlers(bot, db):
     def check_cooldown(user_id):
         if user_id not in state.cooldowns:
             return True, 0
-        target_id, ts = state.cooldowns[user_id]
+        _, ts = state.cooldowns[user_id]
         now = time.time()
         if now - ts >= 600:
             with state.state_lock: del state.cooldowns[user_id]
             return True, 0
-        remaining = int(600 - (now - ts))
-        return False, remaining
+        return False, int(600 - (now - ts))
 
     def clear_chat(chat_id, send_start=False):
         with state.state_lock:
@@ -213,7 +225,7 @@ def register_handlers(bot, db):
         with state.state_lock: st = state.user_states.pop(m.chat.id, None)
         if st:
             action = st.get('action')
-            if action in ('awaiting_admin_message','awaiting_prompt','awaiting_reply','awaiting_broadcast'):
+            if action in ('awaiting_admin_message','awaiting_prompt','awaiting_reply','awaiting_broadcast','awaiting_ai_logs_clear_user'):
                 try: bot.delete_message(m.chat.id, st['hint_msg_id'])
                 except: pass
                 send_and_remember(m.chat.id, messages.CANCEL_DONE)
@@ -281,7 +293,6 @@ def register_handlers(bot, db):
             send_broadcast(message_text, admin_chat_id=m.chat.id)
             return
 
-        # find target
         try:
             target_id = int(target)
             user = db.get_user_by_id(target_id)
@@ -304,22 +315,21 @@ def register_handlers(bot, db):
         if not message_text:
             sent = send_and_remember(m.chat.id, f"✉️ Введите сообщение для {display}.\nДля отмены — /cancel")
             with state.state_lock:
-                state.user_states[m.chat.id] = {'action':'awaiting_reply','target_id':target_id,'target_display':display,'command_msg_id':m.message_id,'hint_msg_id':sent.message_id}
+                state.user_states[m.chat.id] = {'action':'awaiting_reply','target_id':target_id,'target_display':display,
+                                                'command_msg_id':m.message_id,'hint_msg_id':sent.message_id}
             return
 
         sender_display = f"@{m.from_user.username}" if m.from_user.username else m.from_user.first_name
         sender_id = m.from_user.id
 
-        if send_message_to_user(target_id, message_text, sender_display=sender_display):
+        # Отправляем получателю с кнопкой «Ответить» на отправителя
+        if send_message_to_user(target_id, message_text, sender_display=sender_display, reply_to_user_id=sender_id):
             if not is_admin(m.chat.id):
                 with state.state_lock: state.cooldowns[sender_id] = (target_id, time.time())
-            # уведомление админу с кнопкой ответа отправителю
+            # Уведомление админу (без кнопки)
             if ADMIN_CHAT_ID:
-                adm_notify = (f"📨 Переслано:\n{escape_markdown_v2(sender_display)} [ID:{sender_id}] → {escape_markdown_v2(display)}\n"
-                              f"💬 {escape_markdown_v2(message_text)}")
-                markup = InlineKeyboardMarkup()
-                markup.add(InlineKeyboardButton("💬 Ответить", callback_data=f"reply_to_user_{sender_id}"))
-                send_and_remember(ADMIN_CHAT_ID, adm_notify, reply_markup=markup, parse_mode='MarkdownV2')
+                adm_notify = f"📨 Переслано:\n{escape_markdown_v2(sender_display)} [ID:{sender_id}] → {escape_markdown_v2(display)}\n💬 {escape_markdown_v2(message_text)}"
+                send_and_remember(ADMIN_CHAT_ID, adm_notify, parse_mode='MarkdownV2')
             send_and_remember(m.chat.id, messages.M_SENT_USER.format(user_display=escape_markdown_v2(display)),
                               parse_mode='MarkdownV2')
         else:
@@ -378,7 +388,7 @@ def register_handlers(bot, db):
             send_and_remember(m.chat.id, f"❌ Ошибка перезагрузки конфига: {e}")
             return
         try: bot.send_message(m.chat.id, messages.RELOAD_OK, parse_mode='MarkdownV2')
-        except Exception as e: logger.error(f"Reload notify error: {e}")
+        except: pass
         time.sleep(0.5)
         restart_bot(bot)
 
@@ -393,8 +403,7 @@ def register_handlers(bot, db):
             send_and_remember(m.chat.id, "Использование: /ban user_id")
             return
         target = parts[1]
-        try:
-            target_id = int(target)
+        try: target_id = int(target)
         except ValueError:
             target = target.lstrip('@')
             user = find_user_by_username(target)
@@ -422,8 +431,7 @@ def register_handlers(bot, db):
             send_and_remember(m.chat.id, "Использование: /unban user_id")
             return
         target = parts[1]
-        try:
-            target_id = int(target)
+        try: target_id = int(target)
         except ValueError:
             target = target.lstrip('@')
             user = find_user_by_username(target)
@@ -438,7 +446,7 @@ def register_handlers(bot, db):
             else:
                 send_and_remember(m.chat.id, messages.UNBAN_NOT_BANNED)
 
-    @bot.message_handler(commands=['id_check'])
+    @bot.message_handler(commands=['id_i'])
     def id_check_cmd(m):
         db.save_user(m.from_user)
         if not is_admin(m.chat.id):
@@ -446,13 +454,11 @@ def register_handlers(bot, db):
             return
         parts = m.text.strip().split()
         if len(parts) != 2:
-            send_and_remember(m.chat.id, "Использование: /id_check user_id")
+            send_and_remember(m.chat.id, "Использование: /id_i user_id или @username")
             return
-        target = parts[1]
-        try:
-            target_id = int(target)
+        target = parts[1].lstrip('@')
+        try: target_id = int(target)
         except ValueError:
-            target = target.lstrip('@')
             user = find_user_by_username(target)
             if not user:
                 send_and_remember(m.chat.id, messages.BAN_USER_NOT_FOUND)
@@ -462,25 +468,25 @@ def register_handlers(bot, db):
         if not user:
             send_and_remember(m.chat.id, "❌ Пользователь не найден в базе.")
             return
-        # дополнительные данные
         logs_count = db.count_ai_logs(str(target_id))
         banned = target_id in state.banned_users
-        info = (
-            f"👤 *Информация о пользователе*\n\n"
-            f"ID: `{user['user_id']}`\n"
-            f"Username: @{user['username'] or 'не задан'}\n"
-            f"Имя: {user['first_name'] or ''} {user['last_name'] or ''}\n"
-            f"Первый вход: {datetime.fromtimestamp(user['first_seen']).strftime('%d.%m.%Y %H:%M')}\n"
-            f"Последний вход: {datetime.fromtimestamp(user['last_seen']).strftime('%d.%m.%Y %H:%M')}\n"
-            f"Запросов к AI: {logs_count}\n"
-            f"Забанен: {'да' if banned else 'нет'}"
-        )
+        info = (f"👤 *Информация о пользователе*\n\n"
+                f"ID: `{user['user_id']}`\n"
+                f"Username: @{user['username'] or 'не задан'}\n"
+                f"Имя: {user['first_name'] or ''} {user['last_name'] or ''}\n"
+                f"Первый вход: {datetime.fromtimestamp(user['first_seen']).strftime('%d.%m.%Y %H:%M')}\n"
+                f"Последний вход: {datetime.fromtimestamp(user['last_seen']).strftime('%d.%m.%Y %H:%M')}\n"
+                f"Запросов к AI: {logs_count}\n"
+                f"Забанен: {'да' if banned else 'нет'}")
         send_and_remember(m.chat.id, info, parse_mode='MarkdownV2')
 
     # ---------- Text messages (AI) ----------
     @bot.message_handler(content_types=['text'])
     def handle_text(message):
         if message.text and message.text.startswith('/'): return
+        # Запоминаем сообщение пользователя для последующей очистки
+        remember_user_message(message.chat.id, message.message_id)
+
         db.save_user(message.from_user)
         user_id = message.from_user.id
         if check_ban(user_id):
@@ -528,15 +534,14 @@ def register_handlers(bot, db):
                         prev_target, _ = state.cooldowns[target_id]
                         if prev_target == sender_id: del state.cooldowns[target_id]
 
-                if send_message_to_user(target_id, reply_text, sender_display=sender_display):
+                # Отправляем получателю с кнопкой «Ответить» на текущего отправителя
+                if send_message_to_user(target_id, reply_text, sender_display=sender_display, reply_to_user_id=sender_id):
                     if not is_admin(message.chat.id):
                         with state.state_lock: state.cooldowns[sender_id] = (target_id, time.time())
+                    # Уведомление админу без кнопки
                     if ADMIN_CHAT_ID:
-                        adm_notify = (f"📨 Переслано:\n{escape_markdown_v2(sender_display)} [ID:{sender_id}] → {escape_markdown_v2(display)}\n"
-                                      f"💬 {escape_markdown_v2(reply_text)}")
-                        markup = InlineKeyboardMarkup()
-                        markup.add(InlineKeyboardButton("💬 Ответить", callback_data=f"reply_to_user_{sender_id}"))
-                        send_and_remember(ADMIN_CHAT_ID, adm_notify, reply_markup=markup, parse_mode='MarkdownV2')
+                        adm_notify = f"📨 Переслано:\n{escape_markdown_v2(sender_display)} [ID:{sender_id}] → {escape_markdown_v2(display)}\n💬 {escape_markdown_v2(reply_text)}"
+                        send_and_remember(ADMIN_CHAT_ID, adm_notify, parse_mode='MarkdownV2')
                     send_and_remember(message.chat.id, messages.M_SENT_USER.format(user_display=escape_markdown_v2(display)),
                                       parse_mode='MarkdownV2')
                 else:
@@ -553,24 +558,37 @@ def register_handlers(bot, db):
                 cleanup_state(message, st)
                 return
 
-            elif action in ('search','ai_logs_search','edit'):
+            elif action == 'awaiting_ai_logs_clear_user':
+                target = message.text.strip().lstrip('@')
+                user = None
+                if target.isdigit():
+                    user = db.get_user_by_id(int(target))
+                else:
+                    user = find_user_by_username(target)
+                if not user:
+                    send_and_remember(message.chat.id, "❌ Пользователь не найден.")
+                    with state.state_lock: state.user_states.pop(message.chat.id, None)
+                    return
+                db.delete_ai_logs_by_user(user['user_id'])
+                send_and_remember(message.chat.id, f"✅ Логи пользователя @{user['username'] or user['user_id']} удалены.")
+                with state.state_lock: state.user_states.pop(message.chat.id, None)
                 return
 
-        # Notify admin about AI question
+        # Уведомление админу о новом вопросе к ИИ (без кнопки «Ответить»)
         if ADMIN_CHAT_ID:
-            user_str = f"@{message.from_user.username}" if message.from_user.username else message.from_user.first_name
+            user = message.from_user
+            user_str = f"@{user.username}" if user.username else user.first_name
             safe_user = escape_markdown_v2(user_str)
             preview = escape_markdown_v2(message.text[:100])
             if len(message.text) > 100: preview += '…'
             text = messages.NOTIFY_TEXT.format(user=safe_user, preview=preview)
             markup = InlineKeyboardMarkup()
-            # find last log id for this user
-            logs = db.get_ai_logs(limit=1, search_query=str(message.from_user.id))
+            # Последний лог
+            logs = db.get_ai_logs(limit=1, search_query=str(user.id))
             if logs:
                 markup.add(InlineKeyboardButton(messages.VIEW_LOG, callback_data=f"ai_logs_full_{logs[0]['id']}"))
-            markup.add(InlineKeyboardButton("💬 Ответить", callback_data=f"reply_to_user_{message.from_user.id}"))
             try: send_and_remember(ADMIN_CHAT_ID, text, reply_markup=markup, parse_mode='MarkdownV2')
-            except Exception as e: logger.exception(f"Admin notify error: {e}")
+            except: pass
 
         bot.send_chat_action(message.chat.id, 'typing')
         ai_answer = ask_ai(message, message.text, db)
@@ -589,6 +607,7 @@ def register_handlers(bot, db):
     # ---------- Media ----------
     @bot.message_handler(content_types=['photo','audio','document','voice','video','sticker'])
     def handle_media(message):
+        remember_user_message(message.chat.id, message.message_id)
         db.save_user(message.from_user)
         if check_ban(message.from_user.id):
             send_and_remember(message.chat.id, messages.BAN_MESSAGE)
@@ -616,7 +635,7 @@ def register_handlers(bot, db):
         markup = InlineKeyboardMarkup()
         markup.add(InlineKeyboardButton("💬 Ответить", callback_data=f"reply_to_user_{user.id}"))
         try: send_and_remember(ADMIN_CHAT_ID, text, reply_markup=markup, parse_mode='MarkdownV2')
-        except Exception as e: logger.error(f"Admin media notify error: {e}")
+        except: pass
         send_and_remember(message.chat.id, "Слабо текстом? 😏")
 
     # ---------- Admin-only states ----------
