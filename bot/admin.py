@@ -392,7 +392,7 @@ def register_admin_callbacks(bot, db):
             msg_short = log['message'][:30].replace('\n', ' ') + "…" if len(log['message']) > 30 else log['message'].replace('\n', ' ')
             resp_short = log['response'][:30].replace('\n', ' ') + "…" if len(log['response']) > 30 else log['response'].replace('\n', ' ')
             text += (
-                f"🔹 Лог #{log['id']} | {escape_markdown_v2(user_ident)} | {date_str}\n"
+                f"🔹 Лог \\#{log['id']} | {escape_markdown_v2(user_ident)} | {date_str}\n"
                 f"💬 {escape_markdown_v2(msg_short)}\n"
                 f"🤖 {escape_markdown_v2(resp_short)}\n\n"
             )
