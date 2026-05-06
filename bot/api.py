@@ -49,7 +49,6 @@ def create_app(db, bot):
 
         db.save_record(name, score, duration)
 
-        # Отправка уведомления админу
         try:
             text = (f"**НОВЫЙ РЕКОРД!**\n\n"
                     f"👤 Имя: {name}\n"
